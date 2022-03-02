@@ -45,6 +45,9 @@ public class GMScript : MonoBehaviour
     private Vector3Int[] _myChunk;
     private Vector3Int[] _enemyPiece;
     private Vector3Int[] _enemyChunk;
+    private Vector3Int _myPieceOffset;
+    private Vector3Int _enemyPieceOffset;
+    private Vector3Int _spawnPieceOffset;
     
     private Vector3Int[] PIECE_T;
     private Vector3Int[] PIECE_L;
@@ -74,9 +77,12 @@ public class GMScript : MonoBehaviour
         InitializePieces();
     }
     
+    private int PickAPiece() {
+        return Random.Range(0, PIECES.Length);
+    }
     private Vector3Int[] CreateAPiece(int midX, int maxY)
     {
-        var targetPiece = PIECES[Random.Range(0, PIECES.Length)];
+        var targetPiece = PIECES[PickAPiece()];
         var newPiece = new Vector3Int[targetPiece.Length];
         for (var i = 0; i < targetPiece.Length; i++)
         {
@@ -127,10 +133,15 @@ public class GMScript : MonoBehaviour
                 if (wy > _maxEy) _maxEy = wy;
             }
         }
+        int mySpawnX = (_minBx + _maxBx) / 2;
+        int enemySpawnX = (_minEx + _maxEx) / 2;
 
         BlankAllBoards();
-        _myPiece = CreateAPiece((_minBx + _maxBx)/2,_maxBy);
-        _enemyPiece = CreateAPiece((_minEx + _maxEx) / 2, _maxEy);
+        _myPieceOffset = new Vector3Int(0,0,0);
+        _enemyPieceOffset = new Vector3Int(0,0,0);
+        _spawnPieceOffset = new Vector3Int(enemySpawnX - mySpawnX, 0);
+        _myPiece = CreateAPiece(mySpawnX,_maxBy);
+        _enemyPiece = CreateAPiece(enemySpawnX, _maxEy);
         if (!ValidPiece(_myPiece, true))
         {
             Debug.Log("NO VALID MOVES FROM START");
@@ -140,6 +151,7 @@ public class GMScript : MonoBehaviour
         Debug.Log($"MY BOARD SIZE = {(1 + _maxBx - _minBx)} x {(1 + _maxBy - _minBy)} ({_minBx},{_minBy}) -> ({_maxBx},{_maxBy})");
         Debug.Log($"AI BOARD SIZE = {(1 + _maxEx - _minEx)} x {(1 + _maxEy - _minEy)} ({_minEx},{_minEy}) -> ({_maxEx},{_maxEy})");
     }
+
 
     private static Vector3Int[] KillRow(Vector3Int[] chunk, int row)
     {
@@ -246,6 +258,38 @@ public class GMScript : MonoBehaviour
         return newPiece;
     }
 
+    private Vector3Int[] CopyPieceWithOffset(Vector3Int[] piece, Vector3Int offset) {
+        var newPiece = new Vector3Int[piece.Length];
+        Array.Copy(piece,newPiece,piece.Length);
+        for (var i = 0; i < newPiece.Length; i++ )
+        {
+            newPiece[i] = newPiece[i] + offset;
+        }
+        return newPiece;
+    }
+
+    //// Calculates offset Vector for a piece swap.  Will calculate
+    //// from the perspective of the user's piece going to the 
+    //// position of the enemy piece.
+    private Vector3Int CalculateSwapOffset() {
+        return _spawnPieceOffset + _enemyPieceOffset - _myPieceOffset;
+    }
+
+    private void SwapPieces() {
+        if(_enemyPiece == null || _myPiece == null) {
+            return;
+        }
+        Vector3Int swapOffset = CalculateSwapOffset();
+        var myNewPiece = CopyPieceWithOffset(_enemyPiece, -swapOffset);
+        var enemyNewPiece = CopyPieceWithOffset(_myPiece, swapOffset);
+
+        if(ValidPiece(myNewPiece, true) && ValidPiece(enemyNewPiece, false)) {
+            _myPiece = myNewPiece;
+            _enemyPiece = enemyNewPiece;
+            Dirty = true;
+        }
+    }
+
     private static Vector3Int RandomEnemyPointInRange(int x1, int y1, int x2, int y2)
     {
         return new Vector3Int(Random.Range(x1,x2),Random.Range(y1,(y1 + y2)/2));
@@ -281,16 +325,21 @@ public class GMScript : MonoBehaviour
     {
         Dirty = true;
         var tmpPiece = ShiftPiece(_myPiece, -1,0, true);
-        if (null != tmpPiece)
+        if (null != tmpPiece) {
             _myPiece = tmpPiece;
+            _myPieceOffset.x += -1;
+        }
+
     }
 
     private void PlayerDoRight()
     {
         Dirty = true;
         var tmpPiece = ShiftPiece(_myPiece, 1,0, true);
-        if (null != tmpPiece)
+        if (null != tmpPiece) {
             _myPiece = tmpPiece;
+            _myPieceOffset.x += 1;
+        }
     }
 
     private void PlayerDoUp()
@@ -307,10 +356,13 @@ public class GMScript : MonoBehaviour
         {
             _myChunk = ChunkPiece(_myPiece, _myChunk);
             _myPiece = null;
+            _myPieceOffset.x = 0;
+            _myPieceOffset.y = 0;
         }
         else
         {
             _myPiece = tmpPiece;
+            _myPieceOffset.y--;
         }
     }
 
@@ -355,17 +407,76 @@ public class GMScript : MonoBehaviour
 
     private Vector3Int[] EnemyChooseAction(Vector3Int[] piece)
     {
-        if (null == piece) return null; 
-        var enemyGoLeft = ShiftPiece(piece, -1, 0, false);
-        var enemyGoRight = ShiftPiece(piece, 1, 0, false);
-        var enemyGoRotate = RotatePiece(piece, false);
-        Vector3Int[][] enemyOptions = {enemyGoLeft, enemyGoRight, enemyGoRotate, piece};
-        var validOptions = enemyOptions.Where(p => ValidPiece(p, false)).ToArray();
+        if (null == piece) return null;
+
+        Vector3Int[] enemyGoLeft = ShiftPiece(piece, -1, 0, false);
+        Vector3Int[] enemyGoLeftLeft = ShiftPiece(piece, -2, 0, false);
+        Vector3Int[] enemyGoRight = ShiftPiece(piece, 1, 0, false);
+        Vector3Int[] enemyGoRightRight = ShiftPiece(piece, 2, 0, false);
+        Vector3Int[] enemyGoRotate = RotatePiece(piece, false);
+        Vector3Int[] enemyGoLeftRotate = RotatePiece(enemyGoLeft, false);
+        Vector3Int[] enemyGoRightRotate = RotatePiece(enemyGoRight, false);
+        Vector3Int[] enemyGoSwap = null;
+        Vector3Int[] enemyGoSwapLeft = null;
+        Vector3Int[] enemyGoSwapRight = null;
+        if(_myPiece != null) {
+            enemyGoSwap = CopyPieceWithOffset(_myPiece, CalculateSwapOffset());
+            enemyGoSwapLeft = ShiftPiece(enemyGoSwap, -1, 0, false);
+            enemyGoSwapRight = ShiftPiece(enemyGoSwap, 1, 0, false);
+        }
+
+        (String,Vector3Int[])[] enemyOptions = {
+            ("LEFT", enemyGoLeft),
+            ("LEFT,LEFT", enemyGoLeftLeft),
+            ("LEFT,ROTATE", enemyGoLeftRotate),
+            ("RIGHT", enemyGoRight),
+            ("RIGHT,RIGHT", enemyGoRightRight),
+            ("RIGHT,ROTATE", enemyGoRightRotate),
+            ("ROTATE", enemyGoRotate),
+            ("SWAP", enemyGoSwap),
+            ("SWAP,LEFT", enemyGoSwapLeft),
+            ("SWAP,RIGHT", enemyGoSwapRight),
+            ("NONE", piece)};
+
+        var validOptions = enemyOptions.Where(p => {
+            return ValidPiece(p.Item2, false);
+        }).ToArray();
         if (!validOptions.Any()) return piece;
-        var maxScore = validOptions.Max(p => EvaluateEnemyPieceScore(p, _enemyChunk));
-        validOptions = validOptions.Where(p => EvaluateEnemyPieceScore(p, _enemyChunk) == maxScore).ToArray();
+        var maxScore = validOptions.Max(p => EvaluateEnemyPieceScore(p.Item2, _enemyChunk));
+        validOptions = validOptions.Where(p => EvaluateEnemyPieceScore(p.Item2, _enemyChunk) == maxScore).ToArray();
         if (DEBUG_MODE) Debug.Log($"max score = {maxScore}; options = {validOptions.Length}");
-        return validOptions.ElementAt(Random.Range(0, validOptions.Count())); 
+        var pickedOption = validOptions.ElementAt(Random.Range(0, validOptions.Count()));
+
+        if(
+            pickedOption.Item1 == "LEFT" ||
+            pickedOption.Item1 == "LEFT,LEFT" ||
+            pickedOption.Item1 == "LEFT,ROTATE"
+
+        ) {
+            _enemyPieceOffset.x += -1;
+            return enemyGoLeft;
+        }
+        else if(
+            pickedOption.Item1 == "RIGHT" ||
+            pickedOption.Item1 == "RIGHT,RIGHT" ||
+            pickedOption.Item1 == "RIGHT,ROTATE"
+        ) {
+            _enemyPieceOffset.x += 1;
+        }
+        else if(
+            pickedOption.Item1 == "ROTATE"
+        ) {
+            return enemyGoRotate;
+        }
+        else if(
+            pickedOption.Item1 == "SWAP" ||
+            pickedOption.Item1 == "SWAP,RIGHT" ||
+            pickedOption.Item1 == "SWAP,LEFT"
+        ) {
+            SwapPieces();
+            return _enemyPiece;
+        }
+        return pickedOption.Item2;
     }
     
     private void EnemyDoAction()
@@ -374,6 +485,7 @@ public class GMScript : MonoBehaviour
         if (null == _enemyPiece)
         {
             _enemyPiece = CreateAPiece((_minEx + _maxEx) / 2, _maxEy);
+            _enemyPieceOffset = new Vector3Int(0, 0);
             if (!ValidPiece(_enemyPiece, false))
             {
                 if (DEBUG_MODE) Debug.Log("ENEMY DEAD");
@@ -390,6 +502,7 @@ public class GMScript : MonoBehaviour
             }
             else
             {
+                _enemyPieceOffset.y--;
                 _enemyPiece = EnemyChooseAction(tmpPiece);
                 //_enemyPiece = EnemyChooseRecursive(tmpPiece);
             }
@@ -472,7 +585,7 @@ public class GMScript : MonoBehaviour
         infoText.text = $"PTS:{_score}\t\tMAX:{_difficulty}\nCURRIC 576";
         _fixedUpdateCount = 1;
     }
-    
+
     void Update()
     {
         if (null == Camera.main) return; 
@@ -501,6 +614,7 @@ public class GMScript : MonoBehaviour
         else if (Input.GetKeyDown(KeyCode.RightArrow)) { PlayerDoRight(); }
         else if (Input.GetKeyDown(KeyCode.UpArrow)) { PlayerDoUp(); }
         else if (Input.GetKeyDown(KeyCode.DownArrow)) { PlayerDoDrop(); }
+        else if (Input.GetKeyDown(KeyCode.P)) { SwapPieces(); }
 
         if (!Dirty) return;
         DrawAllBoards();
